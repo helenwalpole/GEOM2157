@@ -342,27 +342,48 @@ processing.run('native:intersection', paramDict)
 # Create a pointer for this layer so we can use it again. 
 contoursTrimmed = QgsVectorLayer((processingFP + 'contoursTrimmed.shp'), '', 'ogr')
 
-# Calculate the length of each trimmed contour polyline in contoursTrimmed
+# Get and save the length of each trimmed contour polyline in contoursTrimmed.
+# There are more than 2500 items in this layer, so this is going to be slow to process. 
+# To avoid creating a new field, we can overwrite the values in an existing float field that we don't need. 
+    
+contoursTrimmed.startEditing()
 for i in contoursTrimmed.getFeatures(): 
-    print(type(i))
-    break 
+    i['ALTITUDE'] = float(i.geometry().length())
+    contoursTrimmed.updateFeature(i)
+
+contoursTrimmed.commitChanges()
 
 # Use a spatial join to sum the length of contours in each competition area
 paramDict = {
     'INPUT' : compAreasCriteria4, 
     'JOIN' : (processingFP + 'contoursTrimmed.shp'), 
     'PREDICATE' : [0], 
-    'JOIN_FIELDS' : ['Shape_Le_1'], 
+    'JOIN_FIELDS' : ['ALTITUDE'], 
     'SUMMARIES' : [5], 
     'DISCARD_NONMATCHING' : False, 
     'PREFIX': 'HILLS_', 
-    'OUTPUT' : 'C:/Users/helen/Documents/Assignment5/OPTDATA2/contourSums.shp', 
+    'OUTPUT' : (processingFP + 'contourSums.shp')
     }
 processing.run('qgis:joinbylocationsummary', paramDict)
+# Create a pointer for this layer so we can use it again. 
+contourSums = QgsVectorLayer((processingFP + 'contourSums.shp'), '', 'ogr')
+
+contourSums.startEditing()
+for i in contourSums.getFeatures(): 
+    # Replace nulls with zeroes
+    if i['ALTITUDE_s'] == NULL:
+        contourSum = 0
+    else: 
+        contourSum = i['ALTITUDE_s']
+        
+    i['ALTITUDE_s'] = float(i.geometry().length())
+    contoursTrimmed.updateFeature(i)
+
+contoursTrimmed.commitChanges()
+
 
 # Create a pointer for this layer so we can use it again. 
-compAreasAllCriteria = QgsVectorLayer(XXXXXXXXXXXXX)
-
+compAreasAllCriteria = QgsVectorLayer((processingFP + '.shp'), '', 'ogr')
 
 
 ### SUITABILITY ANALYSIS CALCULATIONS
