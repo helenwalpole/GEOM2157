@@ -46,7 +46,7 @@ riverThreshold = True
 # Set filepaths
 inputFP = 'C:/Users/helen/Documents/Assignment5/inputData/'
 sourceFP = 'C:/Users/helen/Documents/Assignment5/sourceData/'
-processingFP = 'C:/Users/helen/Documents/Assignment5/OPTDATA4/'
+processingFP = 'C:/Users/helen/Documents/Assignment5/OPTDATA1/'
 
 # Create two dictionaries from the user input to guide suitability criteria thresholds and weights.
 thresholdsDict = {
@@ -189,7 +189,7 @@ for i in startLocationsAllCriteria.getFeatures():
     
     # Calculate toilets score
     if toiletsDist < thresholdsDict['toilets']: 
-        # Create an index in the range 0-1, where closer stations have a higher score than farther stations. 
+        # Create an index in the range 0-1, where closer toilet facilities have a higher score than farther stations. 
         toiletsIndex = 1 - toiletsDist/thresholdsDict['toilets']
     else: 
         toiletsIndex = 0
@@ -198,7 +198,7 @@ for i in startLocationsAllCriteria.getFeatures():
     
     # Calcualte drink taps score
     if drinkTapsDist < thresholdsDict['drinkTaps']:
-        # Create an index in the range 0-1, where closer stations have a higher score than farther stations. 
+        # Create an index in the range 0-1, where closer drink taps have a higher score than farther stations. 
         drinkTapsIndex = 1 - drinkTapsDist/thresholdsDict['drinkTaps']
     else: 
         drinkTapsIndex = 0
@@ -207,7 +207,7 @@ for i in startLocationsAllCriteria.getFeatures():
     
     # Calcualte playgrounds score
     if playgroundsDist < thresholdsDict['playgrounds']:
-        # Create an index in the range 0-1, where closer stations have a higher score than farther stations. 
+        # Create an index in the range 0-1, where closer playgrounds have a higher score than farther stations. 
         playgroundsIndex = 1 - playgroundsDist/thresholdsDict['playgrounds']
     else: 
         playgroundsIndex = 0
@@ -517,10 +517,88 @@ dp.addAttributes([QgsField("CA_SCORE",QVariant.Double, 'double', 5,2,)])
 compAreasAllCriteria.updateFields()
 #print (compAreasAllCriteria.fields().names())
 
-for i in compAreasAllCriteria.getFeatures():
+# Calculate suitabililty scores and save them in the new field.
+for i in compAreasAllCriteria.getFeatures(): 
+    # Assign attribute values to variables. 
+    # Check for NULL values (which have the QVariant type) and replace with 0. 
+
+    if type(i['UsedInSeas']) == QVariant: 
+        recentUse = 0.0
+    else: 
+        recentUse = float(i['UsedInSeas'])
+    
+    if type (i['RAIL_DIST']) == QVariant: 
+        linearFeaturesDist = 0.0
+    else: 
+        linearFeatureDist = float(i['RAIL_DIST'])
+    
+    if type(i['PARK_RATIO']) == QVariant:
+        parksRatio = 0.0
+    else:
+        parksRatio = float(i['PARK_RATIO'])
+    
+    if type(i['HILL_RATIO']) == QVariant:
+        hillsRatio = 0.0
+    else: 
+        hillsRatio = float(i['HILL_RATIO'])
+    
+    if type(i['SCORE_max']) == QVariant: 
+        startLocsVal = 0.0
+    else: 
+        startLocsVal = float(i['SCORE_max'])
+    
+    # Calculate usage score.
+    if recentUse <= thresholdsDict['recentUse']: 
+        # Create an index in the range 0-1, where areas used less ofteh have a higher score.
+        recentUseIndex = recentUse/thresholdsDict['recentUse']
+        recentUseScore = round((recentUseIndex * weightsDict['recentUse']),2)
+    else: 
+        # Areas used more than the threshold score -1. 
+        recentUseScore = -1
+    #print('recentUse', recentUseDist, recentUseIndex, recentUseScore)
+    
+    # Calculate score for linear features (trainlines).
+    if linearFeatureDist > 0:
+        # Create a binary score. 
+        # We are using nearest distance of a linear feature from a polygon representing the competition area reduced by the threshold distance. 
+        # Therefore, if the distance is > 0, the linear feature has NOT entered the threshold distance into the competition area, so it scores 1. 
+        # Where the distance is 0, the linear feature has extended into the competition area beyond the acceptable threshold , and scores 0. 
+        linearFeatureIndex = 0
+    else: 
+        linearFeatureIndex = 1
+    linearFeatureBinary = linearFeatureIndex * weightsDict['linearFeatures']
+    
+    #Calculate score for parkland.
+    # Create a parabolic index in the range 0-1, centred on the ideal (threshold) distance 
+    # Ratios below and above the threshold will score lower than the ideal. 
+    if parksRatio <= (2 * thresholdsDict['parklands']): 
+        parksIndex = 1 - (((parksRatio - thresholdsDict['parklands']) / thresholdsDict['parklands'])**2) 
+    else: 
+        parksIndex = 0
+    parksScore = parksIndex * weightsDict['parklands']
+    
+    # Calculate score for hilliness.
+    # Similar to parkland, we want a parabolic index in the range 0-1, centred on the preferred hilliness ratio.
+    if hillsRatio <= (2 * thresholdsDict['hills']):
+        hillsIndex = 1 - (((hillsRatio - thresholdsDict['hills']) / thresholdsDict['hills'])**2) 
+    else: 
+        hillsIndex = 0
+    hillsScore = hillsIndex * weightsDict['hills']
+    
+    # Calculate score for start location.
+    startLocsScore = startLocsVal * weightsDict['starts']
     
     
+    # Calculate the final score. 
+    # Sum the index criteria and multiply by the binary criteria. 
     
+    finalScore = (recentUseScore + parksScore + hillsScore + startLocsScore) * linearFeatureBinary
+    print('Recent use:', recentUseScore, ', linear features:', linearFeatureIndex, ', parks:', parksIndex, ', hills:', hillsIndex, ', starts:', startLocsScore, '\nFINAL SCORE:', finalScore)
+    
+    compAreasAllCriteria.startEditing()
+    i['CA_SCORE'] = finalScore
+    compAreasAllCriteria.updateFeature(i)
+    compAreasAllCriteria.commitChanges()
 
 
 # APPLY STYLES TO MAP LAYERS
