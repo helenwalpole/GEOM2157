@@ -339,17 +339,24 @@ paramDict = {
     'OUTPUT' : (processingFP + 'contoursTrimmed.shp')
     }
 processing.run('native:intersection', paramDict)
+# Create a pointer for this layer so we can use it again. 
+contoursTrimmed = QgsVectorLayer((processingFP + 'contoursTrimmed.shp'), '', 'ogr')
 
-# Use a spatial join to sum the area of parkland in each competition area
+# Calculate the length of each trimmed contour polyline in contoursTrimmed
+for i in contoursTrimmed.getFeatures(): 
+    print(type(i))
+    break 
+
+# Use a spatial join to sum the length of contours in each competition area
 paramDict = {
-    'INPUT' : 'C:/Users/helen/Documents/Assignment5/inputData/compAreas_OV.shp', 
-    'JOIN' : 'C:/Users/helen/Documents/Assignment5/OPTDATA1/parklandIntersect.shp', 
+    'INPUT' : compAreasCriteria4, 
+    'JOIN' : (processingFP + 'contoursTrimmed.shp'), 
     'PREDICATE' : [0], 
-    'JOIN_FIELDS' : ['Shape_Area'], 
+    'JOIN_FIELDS' : ['Shape_Le_1'], 
     'SUMMARIES' : [5], 
     'DISCARD_NONMATCHING' : False, 
-    'PREFIX': 'PARK_', 
-    'OUTPUT' : 'C:/Users/helen/Documents/Assignment5/OPTDATA2/parklandSums.shp', 
+    'PREFIX': 'HILLS_', 
+    'OUTPUT' : 'C:/Users/helen/Documents/Assignment5/OPTDATA2/contourSums.shp', 
     }
 processing.run('qgis:joinbylocationsummary', paramDict)
 
@@ -364,7 +371,7 @@ compAreasAllCriteria = QgsVectorLayer(XXXXXXXXXXXXX)
 
 
 for alg in QgsApplication.processingRegistry().algorithms():
-    if "location" in alg.id():
+    if "area" in alg.id():
         print(alg.id(), "-->", alg.displayName())
 
 processing.algorithmHelp('native:intersection')
