@@ -15,7 +15,7 @@ from PyQt5.QtCore import QVariant
 # selected by the user in the tool UI. 
 
 # Set user-adjustable variables
-stationsThreshold = 1000
+stationsThreshold = 500
 toiletsThreshold = 200
 drinkTapsThreshold = 200
 playgroundsThreshold = 50
@@ -46,7 +46,7 @@ riverThreshold = True
 # Set filepaths
 inputFP = 'C:/Users/helen/Documents/Assignment5/inputData/'
 sourceFP = 'C:/Users/helen/Documents/Assignment5/sourceData/'
-processingFP = 'C:/Users/helen/Documents/Assignment5/OPTDATA2/'
+processingFP = 'C:/Users/helen/Documents/Assignment5/OPTDATA4/'
 
 # Create two dictionaries from the user input to guide suitability criteria thresholds and weights.
 thresholdsDict = {
@@ -79,19 +79,19 @@ startLocationsLayer = iface.addVectorLayer((inputFP + 'startLocations_OV.shp'), 
 # PREPARE DATA LAYERS
 
 
+############################
+# PART 2: PROCESS THE SUITABIILTY OF START LOCATIONS
+############################
 
-# SUITABILITY ANALYSIS: START LOCATIONS
-# We will calcuate distance of each start location from various features using 'joinbynearest'. 
-# We will loop this operation for each of the different types of features we are measuring. 
+# Calcuate distance of each start location from various features using 'joinbynearest'. 
+# Loop this operation for each of the different types of features we are measuring. 
 
-###########
 layersList = ['stations', 'toilets', 'drinkTaps', 'playgrounds']
-processingFP = 'C:/Users/helen/Documents/Assignment5/OPTDATA2/'
 
 for layerIndex, layerString in enumerate(layersList):
     # Set the input filepath for the first iteration to take the file from the 'inputFP' folder. 
     # After that, take files from the processing folder
-    print(layerIndex, layerString)
+    #print(layerIndex, layerString)
     if layerIndex == 0: 
         inputParam = (inputFP + 'startLocations_OV.shp')
     else: 
@@ -108,7 +108,7 @@ for layerIndex, layerString in enumerate(layersList):
     'OUTPUT' : (processingFP + layerString + 'Join.shp'), 
     'PREFIX' : layerString[0:5].upper() + '_'
     }
-    print(paramDict)
+    #print(paramDict)
     # Run the joinbynearest algorithm using the dictionary
     processing.run('native:joinbynearest', paramDict)
     
@@ -134,8 +134,10 @@ for layerIndex, layerString in enumerate(layersList):
                 idx = joinedLayer.fields().indexFromName(field.name())
                 # Use the index to identify and rename the field with a prefix relating to this iteration. 
                 joinedLayer.renameAttribute(idx, (layerString[0:5].upper() + '_DIST'))
+    print('Start critera done: ', layerString)
+    print('Built startLocationsCrit' + str(layerIndex + 1) + '.shp')
 
-print('Done with Start Locations loop')
+print('StartLocations loop complete')
 
 #########################
 # if doing distance to boundaries, do it here#
@@ -147,21 +149,86 @@ paramDict = {
     }
 processing.run('native:polygonstolines', paramDict)
 #compOutlinesLayer = iface.addVectorLayer((sourceFP + 'boundaries.shp'), 'Layer', 'ogr')
+print('Built boundaries.shp')
 
+###########################
 # do a spatial join
 # remove duplicates
+###########################
+
 
 # Create a pointer to the final layer
-startLocationsProcessed = iface.addVectorLayer((processingFP + 'startLocationsCrit' + str(len(layersList)) + '.shp'), 'startLocationsProcessed', 'ogr')
+startLocationsAllCriteria = QgsVectorLayer((processingFP + 'startLocationsCrit' + str(len(layersList)) + '.shp'), 'startLocationsProcessed', 'ogr')
 
-# Use input data to calcuate thresholds, allocate indices, and calculate weights.
-# Could potentially do this inside the processing loop, checking thresholds and weights, 
-# but require dictionaries to be already built.
+# Create a new field to save the final suitability score
+dp = startLocationsAllCriteria.dataProvider()
+dp.addAttributes([QgsField("SCORE",QVariant.Double, 'double', 5,2,)])
+startLocationsAllCriteria.updateFields()
+#print (startLocationsAllCriteria.fields().names())
+
+# Calculate suitability scores using the dictionaries of thresholds and weights.
+# For each criteria, retrieve the relevant distance value from the attribute table. 
+# Allocate an index value based on the threshold from thresholdsDict. 
+# Multiply the index value by the weight from weightsDict. 
+# Store the final score in the attribute table. 
+
+for i in startLocationsAllCriteria.getFeatures(): 
+    stationsDist = i['STATI_DIST']
+    toiletsDist = i['TOILE_DIST']
+    drinkTapsDist = i['DRINK_DIST']
+    playgroundsDist = i['PLAYG_DIST']
+    
+    # Calculate station score
+    if stationsDist < thresholdsDict['stations']: 
+        # Create an index in the range 0-1, where closer stations have a higher score than farther stations. 
+        stationsIndex = 1 - stationsDist/thresholdsDict['stations']
+    else: 
+        stationsIndex = 0
+    stationsScore = stationsIndex * weightsDict['stations']
+    #print("stations", stationsDist, stationsIndex, stationsScore)
+    
+    # Calculate toilets score
+    if toiletsDist < thresholdsDict['toilets']: 
+        # Create an index in the range 0-1, where closer stations have a higher score than farther stations. 
+        toiletsIndex = 1 - toiletsDist/thresholdsDict['toilets']
+    else: 
+        toiletsIndex = 0
+    toiletsScore = toiletsIndex * weightsDict['toilets']
+    #print("toilets", toiletsDist, toiletsIndex, toiletsScore)
+    
+    # Calcualte drink taps score
+    if drinkTapsDist < thresholdsDict['drinkTaps']:
+        # Create an index in the range 0-1, where closer stations have a higher score than farther stations. 
+        drinkTapsIndex = 1 - drinkTapsDist/thresholdsDict['drinkTaps']
+    else: 
+        drinkTapsIndex = 0
+    drinkTapsScore = drinkTapsIndex * weightsDict['drinkTaps']
+    #print("drinkTaps", drinkTapsDist, drinkTapsIndex, drinkTapsScore)
+    
+    # Calcualte playgrounds score
+    if playgroundsDist < thresholdsDict['playgrounds']:
+        # Create an index in the range 0-1, where closer stations have a higher score than farther stations. 
+        playgroundsIndex = 1 - playgroundsDist/thresholdsDict['playgrounds']
+    else: 
+        playgroundsIndex = 0
+    playgroundsScore = playgroundsIndex * weightsDict['playgrounds']
+    #print("playgrounds", playgroundsDist, playgroundsIndex, playgroundsScore)
+    
+    finalScore = round((stationsScore + toiletsScore + drinkTapsScore + playgroundsScore),2)
+    #print(finalScore)
+    
+    startLocationsAllCriteria.startEditing()
+    i['SCORE'] = finalScore
+    startLocationsAllCriteria.updateFeature(i)
+    startLocationsAllCriteria.commitChanges()
+
 
 ############################
+# PART 2: PROCESS THE SUITABIILTY OF COMPETITION AREAS
+############################
 
-# Process suitability of competition areas: 
-# Criteria 1: join compAreas layer to the table of recently used compAreas in the previous season
+# Criteria 1: Recently used competition areas. 
+# Join compAreas layer to the table of recently used compAreas in the previous season. 
 paramDict = {
     'INPUT' : (inputFP + 'compAreas_OV.shp'), #replace with param 
     'DISCARD_NONMATCHING' : False, 
@@ -176,6 +243,7 @@ paramDict = {
 processing.run('native:joinattributestable', paramDict)
 #Create a pointer to the new layer for Criteria 1
 compAreasCriteria1 = QgsVectorLayer((processingFP + 'compAreas1.shp'), '', 'ogr')
+print('Built compAreas1.shp')
 
 # Criteria 2: check for freeways, roads or trainlines more than 200m from boundary
 # Create a new buffered vector layer of the competition areas where boundaries are reduced by 200m
@@ -192,6 +260,7 @@ paramDict = {
 processing.run('native:buffer', paramDict)
 # Create a pointer to the buffered layer
 compAreasBuffered = QgsVectorLayer((processingFP + 'compAreas200m.shp'), '', 'ogr')
+print('Built compAreas200m.shp')
 
 ############# LOOP THROUGH RAIL, FREEWAYS AND ROADS?##########
 
@@ -208,6 +277,7 @@ paramDict = {
     }
 # Run the joinbynearest algorithm using the dictionary
 processing.run('native:joinbynearest', paramDict)
+print('Built trainlinesJoinDuplicates.shp')
 
 # The joinbynearest algorithm creates duplicate features if there is more than one 'nearest' feature inside the polygon. 
 # Delete duplicate records. 
@@ -217,6 +287,7 @@ paramDict = {
     'OUTPUT' : (processingFP + 'trainlinesJoin.shp') 
     }
 processing.run('native:removeduplicatesbyattribute', paramDict)
+print('Built trainlinesJoin.shp')
     
 # Remove extra fields added by the joinbynearest algorithm. 
 #paramDict = { 
@@ -251,13 +322,19 @@ paramDict = {
     'PREFIX' : '' 
     }
 processing.run('native:joinattributestable', paramDict)
+print('Built compAreas2.shp')
 
 # Create a pointer for this layer so we can use it again. 
 compAreasCriteria2 = QgsVectorLayer((processingFP + 'compAreas2.shp'), '', 'ogr')
+print('compAreas criteria 2 done')
+
 
 # Criteria 3: Check for rivers
 # compAreasCriteria3 = QgsVectorLayer(XXXXXXXXXXXXX)
 compAreasCriteria3 = compAreasCriteria2
+
+print('compAreas criteria 3 done')
+
 
 # Criteria 4: Calculate proportion of competition area covered by parkland.
 # Intersect the parkland with the compAreas so that we have accurate measurements of park area within each polygon. 
@@ -275,7 +352,7 @@ processing.run('native:intersection', paramDict)
 # Use a spatial join to sum the area of parkland in each competition area
 paramDict = {
     'INPUT' : compAreasCriteria3, 
-    'JOIN' : (processingFP + 'parklandIntersect1.shp'), 
+    'JOIN' : (processingFP + 'parklandIntersect.shp'), 
     'PREDICATE' : [0], 
     'JOIN_FIELDS' : ['Shape_Area'], 
     'SUMMARIES' : [5], 
@@ -286,6 +363,7 @@ paramDict = {
 processing.run('qgis:joinbylocationsummary', paramDict)
 # Create a pointer for this layer so we can use it again. 
 joinedLayer = QgsVectorLayer((processingFP + 'parklandSums.shp'), '', 'ogr')
+print('Built parklandSums.shp')
 
 # Update each feature with the ratio of parkland to the total area of the compArea polygon. 
 for i in joinedLayer.getFeatures():
@@ -313,6 +391,8 @@ for i in joinedLayer.getFeatures():
     joinedLayer.commitChanges()
     ##NOTE: THIS PART OF THE SCRIPT IS VERY SLOW AND CAUSES A LONG LAG##
 
+print('Computed ratios to parklandSums.shp')
+
 # Loop through the fields and update the name of 'Shape_Ar_1' to 'parkRatio'.
 for field in joinedLayer.fields():
     if field.name() == 'Shape_Ar_1': 
@@ -322,14 +402,16 @@ for field in joinedLayer.fields():
             # Use the index to identify and rename the field
             joinedLayer.renameAttribute(idx, 'PARK_RATIO')
 
+print('Renamed PARK_RATIO column')
+
 # Create a pointer for this layer so we can use it again. 
 compAreasCriteria4 = joinedLayer 
+print('compAreas criteria 4 done')
 
-########no syntax or runtime errors to here. Check for logic errors. #############
-##### NO ERRORS TO HERE. NEED TO FIX NULLS IN SHAPE_AR_1 ###########
 
-# Criteria 5: Intersect contours, sum their length, divide by area and 
+# Criteria 5: Hilliness. 
 # Intersect the parkland with the compAreas so that we have accurate measurements of park area within each polygon. 
+
 paramDict = { 
     'INPUT' : (sourceFP + 'contours.shp'), 
     'INPUT_FIELDS' : [], 
@@ -339,21 +421,23 @@ paramDict = {
     'OUTPUT' : (processingFP + 'contoursTrimmed.shp')
     }
 processing.run('native:intersection', paramDict)
+
 # Create a pointer for this layer so we can use it again. 
 contoursTrimmed = QgsVectorLayer((processingFP + 'contoursTrimmed.shp'), '', 'ogr')
+print('Built contoursTrimmed.shp')
 
 # Get and save the length of each trimmed contour polyline in contoursTrimmed.
 # There are more than 2500 items in this layer, so this is going to be slow to process. 
 # To avoid creating a new field, we can overwrite the values in an existing float field that we don't need. 
-    
 contoursTrimmed.startEditing()
 for i in contoursTrimmed.getFeatures(): 
     i['ALTITUDE'] = float(i.geometry().length())
     contoursTrimmed.updateFeature(i)
 
 contoursTrimmed.commitChanges()
+print('Calculated contour length')
 
-# Use a spatial join to sum the length of contours in each competition area
+# Use a spatial join to sum the length of contours in each competition area.
 paramDict = {
     'INPUT' : compAreasCriteria4, 
     'JOIN' : (processingFP + 'contoursTrimmed.shp'), 
@@ -361,41 +445,136 @@ paramDict = {
     'JOIN_FIELDS' : ['ALTITUDE'], 
     'SUMMARIES' : [5], 
     'DISCARD_NONMATCHING' : False, 
-    'PREFIX': 'HILLS_', 
+    #'PREFIX': 'HILLS_', 
     'OUTPUT' : (processingFP + 'contourSums.shp')
     }
 processing.run('qgis:joinbylocationsummary', paramDict)
+
 # Create a pointer for this layer so we can use it again. 
 contourSums = QgsVectorLayer((processingFP + 'contourSums.shp'), '', 'ogr')
+print('Build contourSums.shp')
 
-contourSums.startEditing()
+# Rename the 'ALTITUDE_s' layer so we can use it to store the hillRatio values.
+for field in contourSums.fields():
+    if field.name() == 'ALTITUDE_s':
+        with edit(contourSums):
+            # Find the index number of the distance field.
+            idx = contourSums.fields().indexFromName(field.name())
+            # Use the index to identify and rename the field with a prefix relating to this iteration. 
+            contourSums.renameAttribute(idx, 'HILL_RATIO')
+
+# Calculate the ratio for each feature and save the result in the attribute table. 
 for i in contourSums.getFeatures(): 
     # Replace nulls with zeroes
-    if i['ALTITUDE_s'] == NULL:
+    if i['HILL_RATIO'] == NULL:
         contourSum = 0
     else: 
-        contourSum = i['ALTITUDE_s']
-        
-    i['ALTITUDE_s'] = float(i.geometry().length())
-    contoursTrimmed.updateFeature(i)
+        contourSum = i['HILL_RATIO']
+    
+    #calculate length of contours(m) per square kilometre
+    contourRatio = contourSum / i['Shape_Area'] * 1000000
+    print('contour ratio: ', contourRatio)
+    print('before: ', i['HILL_RATIO'])
+    
+    contourSums.startEditing()
+    i['HILL_RATIO'] = contourRatio
+    print('after: ', i['HILL_RATIO'])
+    contourSums.updateFeature(i)
+    contourSums.commitChanges()
 
-contoursTrimmed.commitChanges()
-
+print('Updated contour ratio column')
 
 # Create a pointer for this layer so we can use it again. 
-compAreasAllCriteria = QgsVectorLayer((processingFP + '.shp'), '', 'ogr')
+compAreasCrit5 = contourSums
+
+# Criteria 6: Best start location. 
+# Join higest scoring start location to the compAreas layer. 
+paramDict = {
+    'INPUT' : compAreasCrit5, 
+    'JOIN' : startLocationsAllCriteria, 
+    'PREDICATE' : [0], 
+    'JOIN_FIELDS' : ['SCORE'], 
+    'SUMMARIES' : [3], #Returns the maximum score for all start locations in this compArea
+    'DISCARD_NONMATCHING' : False, 
+    'PREFIX': 'SL_', 
+    'OUTPUT' : (processingFP + 'compAreaBestSL.shp'), 
+    }
+processing.run('qgis:joinbylocationsummary', paramDict)
+
+# Create a pointer for this layer so we can use it again. 
+compAreasAllCriteria = QgsVectorLayer((processingFP + 'compAreaBestSL.shp'), 'Comp Areas All Criteria', 'ogr')
+
+print('All Criteria complete')
 
 
 ### SUITABILITY ANALYSIS CALCULATIONS
-# Use mathematical operations to calculate final suitability scores 
+# Use mathematical operations to calculate final suitability scores based on
+# values the user selected in the interface. 
 
+# Create a new field to save the final suitability score
+dp = compAreasAllCriteria.dataProvider()
+dp.addAttributes([QgsField("CA_SCORE",QVariant.Double, 'double', 5,2,)])
+compAreasAllCriteria.updateFields()
+#print (compAreasAllCriteria.fields().names())
+
+for i in compAreasAllCriteria.getFeatures():
+    
+    
+    
+
+
+# APPLY STYLES TO MAP LAYERS
+#compAreaMap = QgisInterface.addVectorLayer(compAreasFinal, 'Competition Areas', 'ogr')
+#startLocationMap = QgisInterface.addVectorLayer(startLocationsFinal, 'Start Locations', 'ogr')
+
+tf = 'FINALSCORE'
+rangeList = []
+opacity = 1
+
+# Symbology for top ten competition areas
+minval = 0.0
+maxval = 1000.0
+myLabel = 'Within 1000m'
+color1a = QtGui.QColor("#333333")
+
+symbol = QgsSymbol.defaultSymbol(myLayer.geometryType())
+symbol.setColor(color1a)
+symbol.setOpacity(opacity)
+
+range1a = QgsRendererRange(minval, maxval, symbol, myLabel)
+rangeList.append(range1a)
+
+
+# symbology for 1000+
+minval1b = 1000.0
+maxval1b = 10000.0
+myLabel = 'Beyond 1000m'
+color1b = QtGui.QColor("#eeeeee")
+
+symbol = QgsSymbol.defaultSymbol(myLayer.geometryType())
+symbol.setColor(color1b)
+symbol.setOpacity(opacity)
+
+range1b = QgsRendererRange(minval1b, maxval1b, symbol, myLabel)
+rangeList.append(range1b)
+print(rangeList)
+
+# Apply ranges to layer
+groupRenderer = QgsGraduatedSymbolRenderer('', rangeList)
+groupRenderer.setMode(QgsGraduatedSymbolRenderer.EqualInterval)
+groupRenderer.setClassAttribute(tf)
+
+myLayer.setRenderer(groupRenderer)
+
+QgsProject.instance().addMapLayer(myLayer)
 
 
 for alg in QgsApplication.processingRegistry().algorithms():
     if "area" in alg.id():
         print(alg.id(), "-->", alg.displayName())
 
-processing.algorithmHelp('native:intersection')
+processing.algorithmHelp('qgis:joinbylocationsummary')
 
+print(iface)
 
 
