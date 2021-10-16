@@ -2,6 +2,7 @@ outputData/
 inputData/
 sourceData/
 ignore/
+OPTDATA*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
