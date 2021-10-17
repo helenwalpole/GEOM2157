@@ -33,7 +33,11 @@ from qgis.core import (QgsProcessing,
                        QgsVectorLayer,
                        QgsField,
                        QgsPointXY,
-                       QgsProcessingParameterFeatureSink)
+                       QgsProcessingParameterFeatureSink,
+                       QgsSymbol,
+                       QgsRendererRange,
+                       QgsGraduatedSymbolRenderer,
+                       QgsProject)
 import math
 
 
@@ -484,24 +488,6 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
 
         print('StartLocations loop complete')
 
-        #########################
-        # if doing distance to boundaries, do it here#
-
-        # Derive a new layer of competiton area boundaries from the compAreas polygon layer for later use. 
-        paramDict = {
-            'INPUT' : (inputFP + 'compAreas_OV.shp'), 
-            'OUTPUT': (sourceFP + 'boundaries.shp')
-            }
-        processing.run('native:polygonstolines', paramDict)
-        #compOutlinesLayer = iface.addVectorLayer((sourceFP + 'boundaries.shp'), 'Layer', 'ogr')
-        print('Built boundaries.shp')
-
-        ###########################
-        # do a spatial join
-        # remove duplicates
-        ###########################
-
-
         # Create a pointer to the final layer
         startLocationsAllCriteria = QgsVectorLayer((processingFP + 'startLocationsCrit' + str(len(layersList)) + '.shp'), 'startLocationsProcessed', 'ogr')
 
@@ -590,11 +576,11 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         compAreasCriteria1 = QgsVectorLayer((processingFP + 'compAreas1.shp'), '', 'ogr')
         print('Built compAreas1.shp')
 
-        # Criteria 2: check for freeways, roads or trainlines more than 200m from boundary
+        # Criteria 2: check for freeways, roads or trainlines ("Linear Features") more than 200m from boundary
         # Create a new buffered vector layer of the competition areas where boundaries are reduced by 200m
         paramDict = {
-            'INPUT' : compAreasCriteria1, #replace with param 
-            'DISTANCE' : -linearFeaturesThreshold, 
+            'INPUT' : compAreasCriteria1, 
+            'DISTANCE' : -linearFeaturesThreshold, #note this is negative so that the buffer reduces the size of the competition area
             'SEGMENTS' : 5, 
             'END_CAP_STYLE' : 0, 
             'JOIN_STYLE' : 0, 
@@ -607,60 +593,43 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         compAreasBuffered = QgsVectorLayer((processingFP + 'compAreas200m.shp'), '', 'ogr')
         print('Built compAreas200m.shp')
 
-        ############# LOOP THROUGH RAIL, FREEWAYS AND ROADS?##########
-
-        #Check to see if train lines share any geometry with any features in this buffered layer. 
+        #Check to see if linearFeatures share any geometry with any features in this buffered layer. 
         paramDict = { 
             'INPUT' : compAreasBuffered, 
             'DISCARD_NONMATCHING' : False, 
-            'INPUT_2' : (sourceFP + 'trainlines.shp'), 
+            'INPUT_2' : (sourceFP + 'linearFeatures.shp'), 
             'FIELDS_TO_COPY' : ['FID'], 
             'MAX_DISTANCE' : None, 
             'NEIGHBORS' : 1, 
-            'OUTPUT' : (processingFP + 'trainlinesJoinDuplicates.shp'), 
-            'PREFIX' : 'RAIL_' 
+            'OUTPUT' : (processingFP + 'linearFeaturesJoinDuplicates.shp'), 
+            'PREFIX' : 'LINE_' 
             }
         # Run the joinbynearest algorithm using the dictionary
         processing.run('native:joinbynearest', paramDict)
-        print('Built trainlinesJoinDuplicates.shp')
+        print('Built linearFeaturesJoinDuplicates.shp')
 
         # The joinbynearest algorithm creates duplicate features if there is more than one 'nearest' feature inside the polygon. 
         # Delete duplicate records. 
         paramDict = { 
             'FIELDS' : ['Map_Name'], 
-            'INPUT' : (processingFP + 'trainlinesJoinDuplicates.shp'), 
-            'OUTPUT' : (processingFP + 'trainlinesJoin.shp') 
+            'INPUT' : (processingFP + 'linearFeaturesJoinDuplicates.shp'), 
+            'OUTPUT' : (processingFP + 'linearFeaturesJoin.shp') 
             }
         processing.run('native:removeduplicatesbyattribute', paramDict)
-        print('Built trainlinesJoin.shp')
+        print('Built linearFeaturesJoin.shp')
             
-        # Remove extra fields added by the joinbynearest algorithm. 
-        #paramDict = { 
-        #    'COLUMN' : ['feature_x','feature_y','nearest_x','nearest_y', 'n', (layerString[0:5].upper() + '_' + 'FID')], 
-        #    'INPUT' : (processingFP + 'trainlinesJoin.shp'), 
-        #    'OUTPUT' : (processingFP + 'compAreas2.shp') 
-        #    }
-        #processing.run('native:deletecolumn', paramDict)
-
-        # Rename the newly-created distance field so we know it relates to trainlines.
-        joinedLayer = QgsVectorLayer((processingFP + 'trainlinesJoin.shp'), '', 'ogr')
+        # Rename the newly-created distance field so we know it relates to linearFeatures.
+        joinedLayer = QgsVectorLayer((processingFP + 'linearFeaturesJoin.shp'), '', 'ogr')
         # Loop through the fields in this layer to find 'distance'
         for field in joinedLayer.fields():
             if field.name() == 'distance':
                 # Find the index number of the distance field.
                 idx = joinedLayer.fields().indexFromName(field.name())
                 # Use the index to identify and rename the field with a prefix relating to this iteration. 
-                joinedLayer.dataProvider().renameAttributes({idx: 'RAIL_DIST'})
+                joinedLayer.dataProvider().renameAttributes({idx: 'LINE_DIST'})
                 joinedLayer.updateFields()
 
-#            if field.name() == 'distance':
-#                with edit(joinedLayer):
-#                    # Find the index number of the distance field.
-#                    idx = joinedLayer.fields().indexFromName(field.name())
-#                    # Use the index to identify and rename the field with a prefix relating to this iteration. 
-#                    joinedLayer.renameAttribute(idx, 'RAIL_DIST')
-
-        # Join the RAIL_DIST field to the compAreas layer, as the above operations were performed on the buffered layer. 
+        # Join the LINE_DIST field to the compAreas layer, as the above operations were performed on the buffered layer. 
         # This is a 1:1 join, so we can use the joinattributestable algorithm. 
         paramDict = {
             'INPUT' : compAreasCriteria1, #replace with param 
@@ -668,32 +637,25 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             'FIELD' : 'FID', 
             'INPUT_2' : joinedLayer, 
             'FIELD_2' : 'FID', 
-            'FIELDS_TO_COPY' : ['RAIL_DIST'], 
+            'FIELDS_TO_COPY' : ['LINE_DIST'], 
             'METHOD' : 1, 
             'OUTPUT' : (processingFP + 'compAreas2.shp'), 
             'PREFIX' : '' 
             }
         processing.run('native:joinattributestable', paramDict)
-        print('Built compAreas2.shp')
+        print('PROGRESS: Built compAreas2.shp')
 
         # Create a pointer for this layer so we can use it again. 
         compAreasCriteria2 = QgsVectorLayer((processingFP + 'compAreas2.shp'), '', 'ogr')
-        print('compAreas criteria 2 done')
+        print('PROGRESS: compAreas criteria 2 done')
 
 
-        # Criteria 3: Check for rivers
-        # compAreasCriteria3 = QgsVectorLayer(XXXXXXXXXXXXX)
-        compAreasCriteria3 = compAreasCriteria2
-
-        print('compAreas criteria 3 done')
-
-
-        # Criteria 4: Calculate proportion of competition area covered by parkland.
+        # Criteria 3: Calculate proportion of competition area covered by parkland.
         # Intersect the parkland with the compAreas so that we have accurate measurements of park area within each polygon. 
         paramDict = { 
             'INPUT' : (sourceFP + 'parkland.shp'), 
             'INPUT_FIELDS' : [], 
-            'OVERLAY' : compAreasCriteria3, 
+            'OVERLAY' : compAreasCriteria2, 
             'OVERLAY_FIELDS' : ['FID'], 
             'OVERLAY_FIELDS_PREFIX' : '', 
             'OUTPUT' : (processingFP + 'parklandIntersect.shp'), 
@@ -703,7 +665,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
 
         # Use a spatial join to sum the area of parkland in each competition area
         paramDict = {
-            'INPUT' : compAreasCriteria3, 
+            'INPUT' : compAreasCriteria2, 
             'JOIN' : (processingFP + 'parklandIntersect.shp'), 
             'PREDICATE' : [0], 
             'JOIN_FIELDS' : ['Shape_Area'], 
@@ -715,18 +677,18 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         processing.run('qgis:joinbylocationsummary', paramDict)
         # Create a pointer for this layer so we can use it again. 
         joinedLayer = QgsVectorLayer((processingFP + 'parklandSums.shp'), '', 'ogr')
-        print('Built parklandSums.shp')
+        print('PROGRESS: Built parklandSums.shp')
 
         # Update each feature with the ratio of parkland to the total area of the compArea polygon. 
         for i in joinedLayer.getFeatures():
             # Capture attribute values so we can replace NULLs with zeroes. 
-            if i['UsedInSeas'] != NULL: 
+            if i['UsedInSeas'] != None: 
                 usedInSeason = int(i['UsedInSeas'])
             else: 
                 usedInSeason = int(0)
             #print('usedInSeason is: ', usedInSeason)
                 
-            if i['Shape_Ar_1'] != NULL: 
+            if i['Shape_Ar_1'] != None: 
                 fltParkArea = float(i['Shape_Ar_1'])
             else: 
                 fltParkArea = float(0)
@@ -743,7 +705,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             joinedLayer.commitChanges()
             ##NOTE: THIS PART OF THE SCRIPT IS VERY SLOW AND CAUSES A LONG LAG##
 
-        print('Computed ratios to parklandSums.shp')
+        print('PROGRESS: Computed ratios to parklandSums.shp')
 
         # Loop through the fields and update the name of 'Shape_Ar_1' to 'parkRatio'.
         for field in joinedLayer.fields():
@@ -759,20 +721,20 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
 #                    # Use the index to identify and rename the field
 #                    joinedLayer.renameAttribute(idx, 'PARK_RATIO')
 
-        print('Renamed PARK_RATIO column')
+        print('PROGRESS: Renamed PARK_RATIO column')
 
         # Create a pointer for this layer so we can use it again. 
-        compAreasCriteria4 = joinedLayer 
-        print('compAreas criteria 4 done')
+        compAreasCriteria3 = joinedLayer 
+        print('PROGRESS: compAreas criteria 3 done')
 
 
-        # Criteria 5: Hilliness. 
+        # Criteria 4: Hilliness. 
         # Intersect the parkland with the compAreas so that we have accurate measurements of park area within each polygon. 
 
         paramDict = { 
             'INPUT' : (sourceFP + 'contours.shp'), 
             'INPUT_FIELDS' : [], 
-            'OVERLAY' : compAreasCriteria4, 
+            'OVERLAY' : compAreasCriteria3, 
             'OVERLAY_FIELDS' : ['FID'], 
             'OVERLAY_FIELDS_PREFIX' : '', 
             'OUTPUT' : (processingFP + 'contoursTrimmed.shp')
@@ -781,7 +743,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
 
         # Create a pointer for this layer so we can use it again. 
         contoursTrimmed = QgsVectorLayer((processingFP + 'contoursTrimmed.shp'), '', 'ogr')
-        print('Built contoursTrimmed.shp')
+        print('PROGRESS: Built contoursTrimmed.shp')
 
         # Get and save the length of each trimmed contour polyline in contoursTrimmed.
         # There are more than 2500 items in this layer, so this is going to be slow to process. 
@@ -792,11 +754,11 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             contoursTrimmed.updateFeature(i)
 
         contoursTrimmed.commitChanges()
-        print('Calculated contour length')
+        print('PROGRESS: Calculated contour length')
 
         # Use a spatial join to sum the length of contours in each competition area.
         paramDict = {
-            'INPUT' : compAreasCriteria4, 
+            'INPUT' : compAreasCriteria3, 
             'JOIN' : (processingFP + 'contoursTrimmed.shp'), 
             'PREDICATE' : [0], 
             'JOIN_FIELDS' : ['ALTITUDE'], 
@@ -809,16 +771,16 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
 
         # Create a pointer for this layer so we can use it again. 
         contourSums = QgsVectorLayer((processingFP + 'contourSums.shp'), '', 'ogr')
-        print('Build contourSums.shp')
+        print('Built contourSums.shp')
 
         # Rename the 'ALTITUDE_s' layer so we can use it to store the hillRatio values.
         for field in contourSums.fields():
             if field.name() == 'ALTITUDE_s':
                 # Find the index number of the distance field.
-                idx = joinedLayer.fields().indexFromName(field.name())
+                idx = contourSums.fields().indexFromName(field.name())
                 # Use the index to identify and rename the field with a prefix relating to this iteration. 
-                joinedLayer.dataProvider().renameAttributes({idx: 'HILL_RATIO'})
-                joinedLayer.updateFields()
+                contourSums.dataProvider().renameAttributes({idx: 'HILL_RATIO'})
+                contourSums.updateFields()
 
 #            if field.name() == 'ALTITUDE_s':
 #                with edit(contourSums):
@@ -830,31 +792,31 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         # Calculate the ratio for each feature and save the result in the attribute table. 
         for i in contourSums.getFeatures(): 
             # Replace nulls with zeroes
-            if i['HILL_RATIO'] == NULL:
+            if i['HILL_RATIO'] == None:
                 contourSum = 0
             else: 
                 contourSum = i['HILL_RATIO']
             
             #calculate length of contours(m) per square kilometre
             contourRatio = contourSum / i['Shape_Area'] * 1000000
-            print('contour ratio: ', contourRatio)
-            print('before: ', i['HILL_RATIO'])
+            #print('contour ratio: ', contourRatio)
+            #print('before: ', i['HILL_RATIO'])
             
             contourSums.startEditing()
             i['HILL_RATIO'] = contourRatio
-            print('after: ', i['HILL_RATIO'])
+            #print('after: ', i['HILL_RATIO'])
             contourSums.updateFeature(i)
             contourSums.commitChanges()
 
         print('Updated contour ratio column')
 
         # Create a pointer for this layer so we can use it again. 
-        compAreasCrit5 = contourSums
+        compAreasCrit4 = contourSums
 
-        # Criteria 6: Best start location. 
+        # Criteria 5: Best start location. 
         # Join higest scoring start location to the compAreas layer. 
         paramDict = {
-            'INPUT' : compAreasCrit5, 
+            'INPUT' : compAreasCrit4, 
             'JOIN' : startLocationsAllCriteria, 
             'PREDICATE' : [0], 
             'JOIN_FIELDS' : ['SCORE'], 
@@ -888,16 +850,17 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         for i in compAreasAllCriteria.getFeatures(): 
             # Assign attribute values to variables. 
             # Check for NULL values (which have the QVariant type) and replace with 0. 
-
+            print(i['Map_Name'])
+            
             if type(i['UsedInSeas']) == QVariant: 
                 recentUse = 0.0
             else: 
                 recentUse = float(i['UsedInSeas'])
             
-            if type (i['RAIL_DIST']) == QVariant: 
+            if type (i['LINE_DIST']) == QVariant: 
                 linearFeaturesDist = 0.0
             else: 
-                linearFeatureDist = float(i['RAIL_DIST'])
+                linearFeatureDist = float(i['LINE_DIST'])
             
             if type(i['PARK_RATIO']) == QVariant:
                 parksRatio = 0.0
@@ -922,9 +885,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 # Areas used more than the threshold score -1. 
                 recentUseScore = -1
-            #print('recentUse', recentUseDist, recentUseIndex, recentUseScore)
+            print('recentUse: ', recentUse, recentUseIndex, recentUseScore)
             
-            # Calculate score for linear features (trainlines).
+            # Calculate score for linear features.
             if linearFeatureDist > 0:
                 # Create a binary score. 
                 # We are using nearest distance of a linear feature from a polygon representing the competition area reduced by the threshold distance. 
@@ -934,6 +897,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 linearFeatureIndex = 1
             linearFeatureBinary = linearFeatureIndex * weightsDict['linearFeatures']
+            print('linearFeatures: ', linearFeatureDist, linearFeatureIndex, weightsDict['linearFeatures'], linearFeatureBinary)
             
             #Calculate score for parkland.
             # Create a parabolic index in the range 0-1, centred on the ideal (threshold) distance 
@@ -943,6 +907,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 parksIndex = 0
             parksScore = parksIndex * weightsDict['parklands']
+            print('parks: ', parksRatio, parksIndex, weightsDict['parklands'], parksScore)
             
             # Calculate score for hilliness.
             # Similar to parkland, we want a parabolic index in the range 0-1, centred on the preferred hilliness ratio.
@@ -951,19 +916,23 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 hillsIndex = 0
             hillsScore = hillsIndex * weightsDict['hills']
+            print('hills: ', hillsRatio, hillsIndex, thresholdsDict['hills'], hillsScore) 
             
             # Calculate score for start location.
             startLocsScore = startLocsVal * weightsDict['starts']
+            print('startLocs: ', startLocsVal, weightsDict['starts'], startLocsScore)
             
             
             # Calculate the final score. 
             # Sum the index criteria and multiply by the binary criteria to produce a raw (not standardised) score.
             rawScore = (recentUseScore + parksScore + hillsScore + startLocsScore) * linearFeatureBinary
+            print('rawScore: ', rawScore)
             
             # Update the variable tracking the maximum finalScore
             if rawScore > scoreMax: 
                 scoreMax = rawScore
-                
+            
+            print('scoreMax: ', scoreMax)
             # Normalise the raw suitability scores using the maximum value.
             if rawScore > 0:
                 finalScore = rawScore / scoreMax
@@ -971,7 +940,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 finalScore = -1
             
-            print('Recent use:', recentUseScore, ', linear features:', linearFeatureIndex, ', parks:', parksIndex, ', hills:', hillsIndex, ', starts:', startLocsScore, '\nFINAL SCORE:', finalScore, ', Max score:', scoreMax)
+            print(i['Map_Name'], 'FINAL SCORE:', finalScore)
             
             compAreasAllCriteria.startEditing()
             i['CA_SCORE'] = finalScore
@@ -1013,7 +982,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
 
         # Apply ranges to layer
         groupRenderer = QgsGraduatedSymbolRenderer('', rangeList)
-        groupRenderer.setMode(QgsGraduatedSymbolRenderer.EqualInterval)
+        groupRenderer.classificationMethod(QgsGraduatedSymbolRenderer.EqualInterval)
         groupRenderer.setClassAttribute(tf)
 
         compAreasAllCriteria.setRenderer(groupRenderer)
