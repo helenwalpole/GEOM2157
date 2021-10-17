@@ -46,7 +46,7 @@ riverThreshold = True
 # Set filepaths
 inputFP = 'C:/Users/helen/Documents/Assignment5/inputData/'
 sourceFP = 'C:/Users/helen/Documents/Assignment5/sourceData/'
-processingFP = 'C:/Users/helen/Documents/Assignment5/OPTDATA1/'
+processingFP = 'C:/Users/helen/Documents/Assignment5/OPTDATA2/'
 
 # Create two dictionaries from the user input to guide suitability criteria thresholds and weights.
 thresholdsDict = {
@@ -517,6 +517,9 @@ dp.addAttributes([QgsField("CA_SCORE",QVariant.Double, 'double', 5,2,)])
 compAreasAllCriteria.updateFields()
 #print (compAreasAllCriteria.fields().names())
 
+# Create a variable to track the maximum suitability score, for use when classifying map symbology
+scoreMax = 0.0
+
 # Calculate suitabililty scores and save them in the new field.
 for i in compAreasAllCriteria.getFeatures(): 
     # Assign attribute values to variables. 
@@ -590,10 +593,21 @@ for i in compAreasAllCriteria.getFeatures():
     
     
     # Calculate the final score. 
-    # Sum the index criteria and multiply by the binary criteria. 
+    # Sum the index criteria and multiply by the binary criteria to produce a raw (not standardised) score.
+    rawScore = (recentUseScore + parksScore + hillsScore + startLocsScore) * linearFeatureBinary
     
-    finalScore = (recentUseScore + parksScore + hillsScore + startLocsScore) * linearFeatureBinary
-    print('Recent use:', recentUseScore, ', linear features:', linearFeatureIndex, ', parks:', parksIndex, ', hills:', hillsIndex, ', starts:', startLocsScore, '\nFINAL SCORE:', finalScore)
+    # Update the variable tracking the maximum finalScore
+    if rawScore > scoreMax: 
+        scoreMax = rawScore
+        
+    # Normalise the raw suitability scores using the maximum value.
+    if rawScore > 0:
+        finalScore = rawScore / scoreMax
+    # Reclassify any scores of 0 as '-1'.
+    else: 
+        finalScore = -1
+    
+    print('Recent use:', recentUseScore, ', linear features:', linearFeatureIndex, ', parks:', parksIndex, ', hills:', hillsIndex, ', starts:', startLocsScore, '\nFINAL SCORE:', finalScore, ', Max score:', scoreMax)
     
     compAreasAllCriteria.startEditing()
     i['CA_SCORE'] = finalScore
@@ -605,36 +619,32 @@ for i in compAreasAllCriteria.getFeatures():
 #compAreaMap = QgisInterface.addVectorLayer(compAreasFinal, 'Competition Areas', 'ogr')
 #startLocationMap = QgisInterface.addVectorLayer(startLocationsFinal, 'Start Locations', 'ogr')
 
-tf = 'FINALSCORE'
+tf = 'CA_SCORE'
 rangeList = []
+classesList = [-1, 0, 0.25, 0.5, 0.75, 1]
 opacity = 1
 
-# Symbology for top ten competition areas
-minval = 0.0
-maxval = 1000.0
-myLabel = 'Within 1000m'
-color1a = QtGui.QColor("#333333")
+# Symbology classes
+for i,v in enumerate(classesList): #len(classesList): 
+    # Avoid running the final loop, as we want to build one fewer class than items in the list. 
+    if i == (len(classesList)-1):
+        break 
+    
+    minval = classesList[i]
+    maxval = classesList[(i+1)]
+    classLabel = (str(maxval*100) + '% suitable')
+    # Set the color range from pale purple for unsuitable to dark purple for most suitable. 
+    # Use maxVal (which has a range of 0-1) to create the steps in the color. 
+    color = QtGui.QColor((226-(156*maxval)), (200-(200*maxval)), (250-(110*maxval)))
+    
+    symbol = QgsSymbol.defaultSymbol(compAreasAllCriteria.geometryType())
+    symbol.setColor(color)
+    symbol.setOpacity(opacity)
+    
+    classRange = QgsRendererRange(minval, maxval, symbol, classLabel)
+    print(classRange)
+    rangeList.append(classRange)
 
-symbol = QgsSymbol.defaultSymbol(myLayer.geometryType())
-symbol.setColor(color1a)
-symbol.setOpacity(opacity)
-
-range1a = QgsRendererRange(minval, maxval, symbol, myLabel)
-rangeList.append(range1a)
-
-
-# symbology for 1000+
-minval1b = 1000.0
-maxval1b = 10000.0
-myLabel = 'Beyond 1000m'
-color1b = QtGui.QColor("#eeeeee")
-
-symbol = QgsSymbol.defaultSymbol(myLayer.geometryType())
-symbol.setColor(color1b)
-symbol.setOpacity(opacity)
-
-range1b = QgsRendererRange(minval1b, maxval1b, symbol, myLabel)
-rangeList.append(range1b)
 print(rangeList)
 
 # Apply ranges to layer
@@ -642,17 +652,17 @@ groupRenderer = QgsGraduatedSymbolRenderer('', rangeList)
 groupRenderer.setMode(QgsGraduatedSymbolRenderer.EqualInterval)
 groupRenderer.setClassAttribute(tf)
 
-myLayer.setRenderer(groupRenderer)
+compAreasAllCriteria.setRenderer(groupRenderer)
 
-QgsProject.instance().addMapLayer(myLayer)
+QgsProject.instance().addMapLayer(compAreasAllCriteria)
 
-
-for alg in QgsApplication.processingRegistry().algorithms():
-    if "area" in alg.id():
-        print(alg.id(), "-->", alg.displayName())
-
-processing.algorithmHelp('qgis:joinbylocationsummary')
-
-print(iface)
+#
+#for alg in QgsApplication.processingRegistry().algorithms():
+#    if "area" in alg.id():
+#        print(alg.id(), "-->", alg.displayName())
+#
+#processing.algorithmHelp('qgis:joinbylocationsummary')
+#
+#print(iface)
 
 
