@@ -353,24 +353,14 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         Here is where the processing itself takes place.
         """
         
-        # create variables from user input
-        vectorBuildingsLayer = self.parameterAsVectorLayer(parameters, self.CENTROIDSINPUT, context)
-        rasterLayer = self.parameterAsRasterLayer(parameters, self.LANDCOVERINPUT, context)
-        distanceThreshold = self.parameterAsDouble(parameters, self.DISTANCETHRESHOLD, context)
-        vegetationThreshold = self.parameterAsDouble(parameters, self.VEGETATIONTHRESHOLD, context)
-        centralAzimuth = self.parameterAsDouble(parameters, self.CENTRALAZIMUTH, context)
-        azimuthBand = self.parameterAsDouble(parameters, self.AZIMUTHBAND, context)
-        myFilePath = self.parameterAsString(parameters, self.FOLDERLOCATION, context)
-#        myFilePath = 'C:/Users/helen/Documents/Mod04AssessedEx3/'
-        
         # Set the variables for input layers 
         startLocations_OV = self.parameterAsVectorLayer(parameters, self.STARTLOCATIONS, context)
         compAreas_OV = self.parameterAsVectorLayer(parameters, self.COMPETITIONAREAS, context)
         
         # Set the variables for file paths 
-        inputFP = self.parameterAsString(parameters, self.INPUTDATAFOLDERLOCATION, context)
-        sourceFP = self.parameterAsString(parameters, self.SOURCEDATAFOLDERLOCATION, context)
-        processingFP = self.parameterAsString(parameters, self.OUTPUTFOLDERLOCATION, context)
+        inputFP = self.parameterAsString(parameters, self.INPUTDATAFOLDERLOCATION, context) + "\\"
+        sourceFP = self.parameterAsString(parameters, self.SOURCEDATAFOLDERLOCATION, context) + "\\"
+        processingFP = self.parameterAsString(parameters, self.OUTPUTDATAFOLDERLOCATION, context) + "\\"
         
         # Set user-adjustable threshold variables 
         stationsThreshold = self.parameterAsDouble(parameters, self.STATIONSTHRESHOLD, context)
@@ -405,7 +395,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             'playgrounds' : playgroundsThreshold, 
             'recentUse' : recentUseThreshold, 
             'linearFeatures' : linearFeaturesThreshold, 
-            'rivers' : riversThreshold, 
+            #'rivers' : riversThreshold, 
             'parklands' : parklandsThreshold, 
             'hills' : hillsThreshold}
 
@@ -422,14 +412,14 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             'playgrounds' : playgroundsWeight, 
             'recentUse' : recentUseWeight, 
             'linearFeatures' : linearFeaturesBinaryWeight, 
-            'rivers' : riversWeight, 
+            #'rivers' : riversWeight, 
             'parklands' : parklandsWeight, 
             'hills' : hillsWeight,
             'starts' : startsWeight}
 
         # Create pointers to the input layers 
-        compAreasLayer = iface.addVectorLayer((inputFP + 'compAreas_OV.shp'), 'Layer', 'ogr')
-        startLocationsLayer = iface.addVectorLayer((inputFP + 'startLocations_OV.shp'), 'Layer', 'ogr')
+        compAreasLayer = QgsVectorLayer((inputFP + 'compAreas_OV.shp'), 'Layer', 'ogr')
+        startLocationsLayer = QgsVectorLayer((inputFP + 'startLocations_OV.shp'), 'Layer', 'ogr')
 
         # PREPARE DATA LAYERS
 
@@ -484,11 +474,11 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             # Loop through the fields in this layer to find 'distance'
             for field in joinedLayer.fields():
                 if field.name() == 'distance':
-                    with edit(joinedLayer):
-                        # Find the index number of the distance field.
-                        idx = joinedLayer.fields().indexFromName(field.name())
-                        # Use the index to identify and rename the field with a prefix relating to this iteration. 
-                        joinedLayer.renameAttribute(idx, (layerString[0:5].upper() + '_DIST'))
+                    # Find the index number of the distance field.
+                    idx = joinedLayer.fields().indexFromName(field.name())
+                    # Use the index to identify and rename the field with a prefix relating to this iteration. 
+                    joinedLayer.dataProvider().renameAttributes({idx: (layerString[0:5].upper() + '_DIST')})
+                    joinedLayer.updateFields()
             print('Start critera done: ', layerString)
             print('Built startLocationsCrit' + str(layerIndex + 1) + '.shp')
 
@@ -657,11 +647,18 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         # Loop through the fields in this layer to find 'distance'
         for field in joinedLayer.fields():
             if field.name() == 'distance':
-                with edit(joinedLayer):
-                    # Find the index number of the distance field.
-                    idx = joinedLayer.fields().indexFromName(field.name())
-                    # Use the index to identify and rename the field with a prefix relating to this iteration. 
-                    joinedLayer.renameAttribute(idx, 'RAIL_DIST')
+                # Find the index number of the distance field.
+                idx = joinedLayer.fields().indexFromName(field.name())
+                # Use the index to identify and rename the field with a prefix relating to this iteration. 
+                joinedLayer.dataProvider().renameAttributes({idx: 'RAIL_DIST'})
+                joinedLayer.updateFields()
+
+#            if field.name() == 'distance':
+#                with edit(joinedLayer):
+#                    # Find the index number of the distance field.
+#                    idx = joinedLayer.fields().indexFromName(field.name())
+#                    # Use the index to identify and rename the field with a prefix relating to this iteration. 
+#                    joinedLayer.renameAttribute(idx, 'RAIL_DIST')
 
         # Join the RAIL_DIST field to the compAreas layer, as the above operations were performed on the buffered layer. 
         # This is a 1:1 join, so we can use the joinattributestable algorithm. 
@@ -751,11 +748,16 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         # Loop through the fields and update the name of 'Shape_Ar_1' to 'parkRatio'.
         for field in joinedLayer.fields():
             if field.name() == 'Shape_Ar_1': 
-                with edit(joinedLayer):
-                    # Get the index number of the 'Shape_Ar_1' field 
-                    idx = joinedLayer.fields().indexFromName(field.name())
-                    # Use the index to identify and rename the field
-                    joinedLayer.renameAttribute(idx, 'PARK_RATIO')
+                # Find the index number of the 'Shape_Ar_1' field.
+                idx = joinedLayer.fields().indexFromName(field.name())
+                # Use the index to identify and rename the field with a prefix relating to this iteration. 
+                joinedLayer.dataProvider().renameAttributes({idx: 'PARK_RATIO'})
+                joinedLayer.updateFields()
+#                with edit(joinedLayer):
+#                    # Get the index number of the 'Shape_Ar_1' field 
+#                    idx = joinedLayer.fields().indexFromName(field.name())
+#                    # Use the index to identify and rename the field
+#                    joinedLayer.renameAttribute(idx, 'PARK_RATIO')
 
         print('Renamed PARK_RATIO column')
 
@@ -812,11 +814,18 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         # Rename the 'ALTITUDE_s' layer so we can use it to store the hillRatio values.
         for field in contourSums.fields():
             if field.name() == 'ALTITUDE_s':
-                with edit(contourSums):
-                    # Find the index number of the distance field.
-                    idx = contourSums.fields().indexFromName(field.name())
-                    # Use the index to identify and rename the field with a prefix relating to this iteration. 
-                    contourSums.renameAttribute(idx, 'HILL_RATIO')
+                # Find the index number of the distance field.
+                idx = joinedLayer.fields().indexFromName(field.name())
+                # Use the index to identify and rename the field with a prefix relating to this iteration. 
+                joinedLayer.dataProvider().renameAttributes({idx: 'HILL_RATIO'})
+                joinedLayer.updateFields()
+
+#            if field.name() == 'ALTITUDE_s':
+#                with edit(contourSums):
+#                    # Find the index number of the distance field.
+#                    idx = contourSums.fields().indexFromName(field.name())
+#                    # Use the index to identify and rename the field with a prefix relating to this iteration. 
+#                    contourSums.renameAttribute(idx, 'HILL_RATIO')
 
         # Calculate the ratio for each feature and save the result in the attribute table. 
         for i in contourSums.getFeatures(): 
