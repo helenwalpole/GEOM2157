@@ -39,9 +39,6 @@ parklandsWeight = 5
 hillsWeight = 5
 startsWeight = 3
 
-# Set the fixed variables
-freewaysThreshold = 200
-riverThreshold = True
 
 # Set filepaths
 inputFP = 'C:/Users/helen/Documents/Assignment5/inputData/'
@@ -49,6 +46,7 @@ sourceFP = 'C:/Users/helen/Documents/Assignment5/sourceData/'
 processingFP = 'C:/Users/helen/Documents/Assignment5/OPTDATA2/'
 
 # Create two dictionaries from the user input to guide suitability criteria thresholds and weights.
+
 thresholdsDict = {
     'stations' : stationsThreshold, 
     'toilets' : toiletsThreshold, 
@@ -60,13 +58,19 @@ thresholdsDict = {
     'parklands' : parklandsThreshold, 
     'hills' : hillsThreshold}
 
+# Process the value for 'linearFeaturesWeight' from a string ('yes'/'no') to a binary value. 
+if linearFeaturesWeight == 'yes':
+    linearFeaturesBinaryWeight = 1
+else: 
+    linearFeaturesBinaryWeight = 0
+    
 weightsDict = {
     'stations' : stationsWeight, 
     'toilets' : toiletsWeight, 
     'drinkTaps' : drinkTapsWeight, 
     'playgrounds' : playgroundsWeight, 
     'recentUse' : recentUseWeight, 
-    'linearFeatures' : linearFeaturesWeight, 
+    'linearFeatures' : linearFeaturesBinaryWeight, 
     'rivers' : riversWeight, 
     'parklands' : parklandsWeight, 
     'hills' : hillsWeight,
