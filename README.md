@@ -1,7 +1,7 @@
 # GEOM2157
 Geospatial Programming (RMIT University)
 
-This script and associated data has been created for assessment of the final assignment. 
+This script and associated data has been created by Helen Walpole (s3873037) for assessment. 
 
 Two scripts are provided. One runs in the python script editor, the other runs from the QGIS processing toolbox. 
 Both use the same files in the inputData and sourceData folders. 
