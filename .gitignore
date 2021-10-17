@@ -1,8 +1,7 @@
 outputData/
-inputData/
-sourceData/
 ignore/
 OPTDATA*/
+processingData*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

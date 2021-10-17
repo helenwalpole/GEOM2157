@@ -21,24 +21,26 @@ from PyQt5.QtCore import QVariant
 from qgis.gui import QgisInterface
 from qgis.PyQt import QtGui
 from qgis import processing
-from qgis.core import (QgsProcessing,
+from qgis.core import (Qgis,
+                       QgsProcessing,
                        QgsFeatureSink,
                        QgsProcessingException,
                        QgsProcessingAlgorithm,
                        QgsProcessingParameterNumber, 
-                       QgsProcessingParameterRasterLayer, 
                        QgsProcessingParameterFeatureSource, 
                        QgsProcessingParameterFolderDestination, 
                        QgsProcessingParameterEnum, 
                        QgsVectorLayer,
                        QgsField,
-                       QgsPointXY,
                        QgsProcessingParameterFeatureSink,
                        QgsSymbol,
                        QgsRendererRange,
                        QgsGraduatedSymbolRenderer,
-                       QgsProject)
-import math
+                       QgsProject,
+                       QgsApplication,
+                       QgsMessageLog
+                       )
+import csv
 
 
 class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
@@ -55,8 +57,8 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
     INPUTDATAFOLDERLOCATION = 'inputFP'
     SOURCEDATAFOLDERLOCATION = 'sourceFP'
     OUTPUTDATAFOLDERLOCATION = 'processingFP'
-    STARTLOCATIONS = 'startLocations_OV'
-    COMPETITIONAREAS = 'compAreas_OV'
+    #STARTLOCATIONS = 'startLocations_OV'
+    #COMPETITIONAREAS = 'compAreas_OV'
     
     STATIONSTHRESHOLD = 'stationsThreshold'
     TOILETSTHRESHOLD = 'toiletsThreshold'
@@ -127,17 +129,21 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         parameters and outputs associated with it..
         """
         
-        ###TO UPDATE###
-        ###CAT2###
-        return self.tr("This algorithm takes a classified landcover raster and a set of building centroids (vector points) as inputs and returns a polygon layer with buildings classified according to their fire vulnerability.\n"
-        + "Fire vulnerability is assessed in relation to three factors: a structure's proximity to other structures, a structure's proximity to vegetation, and the presence of other structures upwind of the structure."
-        + "The algorithm takes the following as inputs: \n"
-        + "A vector point layer indicating building centroids\n"
-        + "A raster layer with landcover classification\n"
-        + "The minimum safe distance for a neighbouring structure (in metres)\n"
-        + "The minimum safe percentage of vegetation in the surrounding 30m area (in metres)\n"
-        + "The current wind direction (as a compass direction)\n"
-        + "The range of directions for which the wind is considered dangerous (eg, within 30 degrees)\n")
+        return self.tr("This algorithm takes current orienteering competition areas (vector polygons, .shp) "
+        + "and current orienteering start locations (vector points, .shp) as inputs "
+        + "as well as a list of recently-used competition areas and returns a choropleth map "
+        + "with competition areas classified according to their suitability to host the annual championship event.\n"
+        + "Suitability is assessed in relation to seven criteria: "
+        + "how recently it has been used, the proportion of the competition area covered by parkland, "
+        + "the presence of major roads and other linear obstacles, the hilliness of the area, "
+        + "and the quality of the start location (which is itself based on its proximity to railway stations, public toilets, drink taps and playgrounds).\n" 
+        + "Suitability is calculated based on the user's perception of the relative importance of each of these features. "
+        + "The algorithm takes the following as inputs from the user: \n"
+        + " A vector point layer indicating start locations\n"
+        + " A vector polygon layer indicating competition areas\n"
+        + " A table of recent use of competition areas\n" 
+        + "The algorithm requires a number of existing datasets to perform calculations, which should be downloaded from github and saved by the user in a directory.")
+        
 
     def initAlgorithm(self, config=None):
         """
@@ -149,7 +155,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFolderDestination(
                 self.INPUTDATAFOLDERLOCATION,
-                self.tr('Select the folder where your orienteering shapefiles are saved.')
+                self.tr('Select the "inputData" folder where your orienteering shapefiles are saved.')
             )
         )
         
@@ -157,7 +163,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFolderDestination(
                 self.OUTPUTDATAFOLDERLOCATION,
-                self.tr('Select a folder to save the output files.')
+                self.tr('Select the "processingData" folder where you will save your output files.')
             )
         )
 
@@ -165,35 +171,15 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterFolderDestination(
                 self.SOURCEDATAFOLDERLOCATION,
-                self.tr('Select a folder where your source data shapefiles are saved.')
+                self.tr('Select the "sourceData" folder where your source data shapefiles are saved.')
             )
         )
-        
-        # Add the input vector features source for the start locations. It can have any kind of
-        # geometry.
-        self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                self.STARTLOCATIONS,
-                self.tr('Select your start locations shapefile.'),
-                [QgsProcessing.TypeVectorAnyGeometry]
-            )
-        )
-        
-        # Add the input vector features source for the competition areas. It can have any kind of
-        # geometry.
-        self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                self.COMPETITIONAREAS,
-                self.tr('Select your competition areas shapefile.'),
-                [QgsProcessing.TypeVectorAnyGeometry]
-            )
-        )
-        
+                
         # Add a threshold value for stations. 
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.STATIONSTHRESHOLD,
-                self.tr('What is the furthest acceptable distance from a start location \nto the nearest train station? (in metres)'),
+                self.tr('What is the furthest acceptable distance to the nearest train station\nfrom a start location ? (in metres)'),
                 defaultValue=500,
                 minValue=0.0
             )
@@ -203,9 +189,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.STATIONSWEIGHT,
-                self.tr('How important is this? \n(0-5, where 0 is "unimportant" and 5 is "very important")'),
+                self.tr('How important is this? \n(1-5, where 1 is "unimportant" and 5 is "very important")'),
                 defaultValue=3,
-                minValue=0.0
+                minValue=1
             )
         )
         
@@ -213,19 +199,19 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.TOILETSTHRESHOLD,
-                self.tr('What is the furthest acceptable distance from a start location \nto the nearest public toilets? (in metres)'),
+                self.tr('What is the furthest acceptable distance to the nearest public toilets\nfrom a start location? (in metres)'),
                 defaultValue=200,
                 minValue=0.0
             )
         )
-                
+        
         # Add a weight for toilets. 
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.TOILETSWEIGHT,
-                self.tr('How important is this? \n(0-5, where 0 is "unimportant" and 5 is "very important")'),
+                self.tr('How important is this? \n(1-5, where 1 is "unimportant" and 5 is "very important")'),
                 defaultValue=3,
-                minValue=0.0
+                minValue=1
             )
         )
         
@@ -233,7 +219,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.DRINKTAPSTHRESHOLD,
-                self.tr('What is the furthest acceptable distance from a start location \nto the nearest drink tap? (in metres)'),
+                self.tr('What is the furthest acceptable distance to the nearest drink tap\nfrom a start location? (in metres)'),
                 defaultValue=200,
                 minValue=0.0
             )
@@ -243,9 +229,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.DRINKTAPSWEIGHT,
-                self.tr('How important is this? \n(0-5, where 0 is "unimportant" and 5 is "very important")'),
+                self.tr('How important is this? \n(1-5, where 1 is "unimportant" and 5 is "very important")'),
                 defaultValue=3,
-                minValue=0.0
+                minValue=1
             )
         )
         
@@ -253,7 +239,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PLAYGROUNDSTHRESHOLD,
-                self.tr('What is the furthest acceptable distance from a start location to \nthe nearest playground? (in metres)'),
+                self.tr('What is the furthest acceptable distance to the nearest playground\nfrom a start location? (in metres)'),
                 defaultValue=50,
                 minValue=0.0
             )
@@ -263,7 +249,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PLAYGROUNDSWEIGHT,
-                self.tr('How important is this? \n(0-5, where 0 is "unimportant" and 5 is "very important")'),
+                self.tr('How important is this? \n(1-5, where 1 is "unimportant" and 5 is "very important")'),
                 defaultValue=3,
                 minValue=0.0
             )
@@ -273,9 +259,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.STARTSWEIGHT,
-                self.tr('How important is it to have a good start location? \n(0-5, where 0 is "unimportant" and 5 is "very important")'),
+                self.tr('How important is it to have a good start location? \n(1-5, where 1 is "unimportant" and 5 is "very important")'),
                 defaultValue=3,
-                minValue=0.0
+                minValue=1
             )
         )
         
@@ -294,9 +280,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.PARKLANDSWEIGHT,
-                self.tr('How important is this? \n(0-5, where 0 is "unimportant" and 5 is "very important")'),
+                self.tr('How important is this? \n(1-5, where 1 is "unimportant" and 5 is "very important")'),
                 defaultValue=3,
-                minValue=0.0
+                minValue=1
             )
         )
         
@@ -325,9 +311,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.HILLSWEIGHT,
-                self.tr('How important is this? \n(0-5, where 0 is "unimportant" and 5 is "very important")'),
+                self.tr('How important is this? \n(1-5, where 1 is "unimportant" and 5 is "very important")'),
                 defaultValue=3,
-                minValue=0.0
+                minValue=1
             )
         )
 
@@ -345,9 +331,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.RECENTUSEWEIGHT,
-                self.tr('How important is this? \n(0-5, where 0 is "unimportant" and 5 is "very important")'),
+                self.tr('How important is this? \n(1-5, where 1 is "unimportant" and 5 is "very important")'),
                 defaultValue=3,
-                minValue=0.0
+                minValue=1
             )
         )
         
@@ -358,8 +344,8 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         """
         
         # Set the variables for input layers 
-        startLocations_OV = self.parameterAsVectorLayer(parameters, self.STARTLOCATIONS, context)
-        compAreas_OV = self.parameterAsVectorLayer(parameters, self.COMPETITIONAREAS, context)
+#        startLocations_OV = self.parameterAsVectorLayer(parameters, self.STARTLOCATIONS, context)
+#        compAreas_OV = self.parameterAsVectorLayer(parameters, self.COMPETITIONAREAS, context)
         
         # Set the variables for file paths 
         inputFP = self.parameterAsString(parameters, self.INPUTDATAFOLDERLOCATION, context) + "\\"
@@ -399,15 +385,8 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             'playgrounds' : playgroundsThreshold, 
             'recentUse' : recentUseThreshold, 
             'linearFeatures' : linearFeaturesThreshold, 
-            #'rivers' : riversThreshold, 
             'parklands' : parklandsThreshold, 
             'hills' : hillsThreshold}
-
-        # Process the value for 'linearFeaturesWeight' from a string ('yes'/'no') to a binary value. 
-        if linearFeaturesWeight == 'yes':
-            linearFeaturesBinaryWeight = 1
-        else: 
-            linearFeaturesBinaryWeight = 0
             
         weightsDict = {
             'stations' : stationsWeight, 
@@ -415,8 +394,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             'drinkTaps' : drinkTapsWeight, 
             'playgrounds' : playgroundsWeight, 
             'recentUse' : recentUseWeight, 
-            'linearFeatures' : linearFeaturesBinaryWeight, 
-            #'rivers' : riversWeight, 
+            'linearFeatures' : linearFeaturesWeight, 
             'parklands' : parklandsWeight, 
             'hills' : hillsWeight,
             'starts' : startsWeight}
@@ -424,10 +402,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         # Create pointers to the input layers 
         compAreasLayer = QgsVectorLayer((inputFP + 'compAreas_OV.shp'), 'Layer', 'ogr')
         startLocationsLayer = QgsVectorLayer((inputFP + 'startLocations_OV.shp'), 'Layer', 'ogr')
-
-        # PREPARE DATA LAYERS
-
-
+            
         ############################
         # PART 2: PROCESS THE SUITABIILTY OF START LOCATIONS
         ############################
@@ -436,11 +411,10 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         # Loop this operation for each of the different types of features we are measuring. 
 
         layersList = ['stations', 'toilets', 'drinkTaps', 'playgrounds']
-
+        
         for layerIndex, layerString in enumerate(layersList):
             # Set the input filepath for the first iteration to take the file from the 'inputFP' folder. 
             # After that, take files from the processing folder
-            #print(layerIndex, layerString)
             if layerIndex == 0: 
                 inputParam = (inputFP + 'startLocations_OV.shp')
             else: 
@@ -457,7 +431,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             'OUTPUT' : (processingFP + layerString + 'Join.shp'), 
             'PREFIX' : layerString[0:5].upper() + '_'
             }
-            #print(paramDict)
+
             # Run the joinbynearest algorithm using the dictionary
             processing.run('native:joinbynearest', paramDict)
             
@@ -473,8 +447,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             
             # The joinbynearest algorithm has created a new field called 'distance'. 
             # We need to rename this field to keep track of which feature the distance relates to. 
-            # First, create a pointer to the new layer we have created
+            # First, create a pointer to the new layer we have created.
             joinedLayer = QgsVectorLayer((processingFP + 'startLocationsCrit' + str(layerIndex + 1) + '.shp'), '', 'ogr')
+            
             # Loop through the fields in this layer to find 'distance'
             for field in joinedLayer.fields():
                 if field.name() == 'distance':
@@ -483,11 +458,9 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
                     # Use the index to identify and rename the field with a prefix relating to this iteration. 
                     joinedLayer.dataProvider().renameAttributes({idx: (layerString[0:5].upper() + '_DIST')})
                     joinedLayer.updateFields()
-            print('Start critera done: ', layerString)
-            print('Built startLocationsCrit' + str(layerIndex + 1) + '.shp')
-
+        
         print('StartLocations loop complete')
-
+        
         # Create a pointer to the final layer
         startLocationsAllCriteria = QgsVectorLayer((processingFP + 'startLocationsCrit' + str(len(layersList)) + '.shp'), 'startLocationsProcessed', 'ogr')
 
@@ -495,7 +468,6 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         dp = startLocationsAllCriteria.dataProvider()
         dp.addAttributes([QgsField("SCORE",QVariant.Double, 'double', 5,2,)])
         startLocationsAllCriteria.updateFields()
-        #print (startLocationsAllCriteria.fields().names())
 
         # Calculate suitability scores using the dictionaries of thresholds and weights.
         # For each criteria, retrieve the relevant distance value from the attribute table. 
@@ -516,7 +488,6 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 stationsIndex = 0
             stationsScore = stationsIndex * weightsDict['stations']
-            #print("stations", stationsDist, stationsIndex, stationsScore)
             
             # Calculate toilets score
             if toiletsDist < thresholdsDict['toilets']: 
@@ -525,7 +496,6 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 toiletsIndex = 0
             toiletsScore = toiletsIndex * weightsDict['toilets']
-            #print("toilets", toiletsDist, toiletsIndex, toiletsScore)
             
             # Calcualte drink taps score
             if drinkTapsDist < thresholdsDict['drinkTaps']:
@@ -534,7 +504,6 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 drinkTapsIndex = 0
             drinkTapsScore = drinkTapsIndex * weightsDict['drinkTaps']
-            #print("drinkTaps", drinkTapsDist, drinkTapsIndex, drinkTapsScore)
             
             # Calcualte playgrounds score
             if playgroundsDist < thresholdsDict['playgrounds']:
@@ -543,10 +512,8 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 playgroundsIndex = 0
             playgroundsScore = playgroundsIndex * weightsDict['playgrounds']
-            #print("playgrounds", playgroundsDist, playgroundsIndex, playgroundsScore)
             
             finalScore = round((stationsScore + toiletsScore + drinkTapsScore + playgroundsScore),2)
-            #print(finalScore)
             
             startLocationsAllCriteria.startEditing()
             i['SCORE'] = finalScore
@@ -715,18 +682,13 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
                 # Use the index to identify and rename the field with a prefix relating to this iteration. 
                 joinedLayer.dataProvider().renameAttributes({idx: 'PARK_RATIO'})
                 joinedLayer.updateFields()
-#                with edit(joinedLayer):
-#                    # Get the index number of the 'Shape_Ar_1' field 
-#                    idx = joinedLayer.fields().indexFromName(field.name())
-#                    # Use the index to identify and rename the field
-#                    joinedLayer.renameAttribute(idx, 'PARK_RATIO')
-
+        
         print('PROGRESS: Renamed PARK_RATIO column')
-
+        
         # Create a pointer for this layer so we can use it again. 
         compAreasCriteria3 = joinedLayer 
         print('PROGRESS: compAreas criteria 3 done')
-
+        
 
         # Criteria 4: Hilliness. 
         # Intersect the parkland with the compAreas so that we have accurate measurements of park area within each polygon. 
@@ -781,14 +743,7 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
                 # Use the index to identify and rename the field with a prefix relating to this iteration. 
                 contourSums.dataProvider().renameAttributes({idx: 'HILL_RATIO'})
                 contourSums.updateFields()
-
-#            if field.name() == 'ALTITUDE_s':
-#                with edit(contourSums):
-#                    # Find the index number of the distance field.
-#                    idx = contourSums.fields().indexFromName(field.name())
-#                    # Use the index to identify and rename the field with a prefix relating to this iteration. 
-#                    contourSums.renameAttribute(idx, 'HILL_RATIO')
-
+        
         # Calculate the ratio for each feature and save the result in the attribute table. 
         for i in contourSums.getFeatures(): 
             # Replace nulls with zeroes
@@ -823,13 +778,14 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             'SUMMARIES' : [3], #Returns the maximum score for all start locations in this compArea
             'DISCARD_NONMATCHING' : False, 
             'PREFIX': 'SL_', 
-            'OUTPUT' : (processingFP + 'compAreaBestSL.shp'), 
+            'OUTPUT' : (processingFP + 'compAreaFinalRanking.shp'), 
             }
         processing.run('qgis:joinbylocationsummary', paramDict)
 
         # Create a pointer for this layer so we can use it again. 
-        compAreasAllCriteria = QgsVectorLayer((processingFP + 'compAreaBestSL.shp'), 'Comp Areas All Criteria', 'ogr')
-
+        compAreasAllCriteria = QgsVectorLayer((processingFP + 'compAreaFinalRanking.shp'), 'Comp Areas All Criteria', 'ogr')
+        #compAreasVisible = QgisInterface.addVectorLayer(compAreasAllCriteria)
+    
         print('All Criteria complete')
 
 
@@ -841,16 +797,14 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
         dp = compAreasAllCriteria.dataProvider()
         dp.addAttributes([QgsField("CA_SCORE",QVariant.Double, 'double', 5,2,)])
         compAreasAllCriteria.updateFields()
-        #print (compAreasAllCriteria.fields().names())
 
         # Create a variable to track the maximum suitability score, for use when classifying map symbology
         scoreMax = 0.0
-
+        
         # Calculate suitabililty scores and save them in the new field.
         for i in compAreasAllCriteria.getFeatures(): 
             # Assign attribute values to variables. 
             # Check for NULL values (which have the QVariant type) and replace with 0. 
-            print(i['Map_Name'])
             
             if type(i['UsedInSeas']) == QVariant: 
                 recentUse = 0.0
@@ -885,19 +839,19 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 # Areas used more than the threshold score -1. 
                 recentUseScore = -1
-            print('recentUse: ', recentUse, recentUseIndex, recentUseScore)
             
             # Calculate score for linear features.
-            if linearFeatureDist > 0:
-                # Create a binary score. 
-                # We are using nearest distance of a linear feature from a polygon representing the competition area reduced by the threshold distance. 
-                # Therefore, if the distance is > 0, the linear feature has NOT entered the threshold distance into the competition area, so it scores 1. 
-                # Where the distance is 0, the linear feature has extended into the competition area beyond the acceptable threshold , and scores 0. 
-                linearFeatureIndex = 0
-            else: 
-                linearFeatureIndex = 1
-            linearFeatureBinary = linearFeatureIndex * weightsDict['linearFeatures']
-            print('linearFeatures: ', linearFeatureDist, linearFeatureIndex, weightsDict['linearFeatures'], linearFeatureBinary)
+            # We are using nearest distance of a linear feature from a polygon representing the competition area reduced by the threshold distance. 
+            # Therefore, if the distance is > 0, the linear feature has NOT entered the threshold distance into the competition area, so it scores 1. 
+            # Where the distance is 0, the linear feature has extended into the competition area beyond the acceptable threshold , and scores 0. 
+            if weightsDict['linearFeatures'] == 'yes': # linear Features in the competition area are considered acceptable
+                linearFeatureIndex = 1 # regardless of whether there are any linear features in the competition area 
+            else: # if linear Features are considered unacceptable
+                if linearFeatureDist == 0: #ie, there are linear features in the competition area
+                    linearFeatureIndex = 0
+                else: # there are no linear features in the comp area to worry about
+                    linearFeatureIndex = 1
+            linearFeatureScore = linearFeatureIndex
             
             #Calculate score for parkland.
             # Create a parabolic index in the range 0-1, centred on the ideal (threshold) distance 
@@ -907,7 +861,6 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 parksIndex = 0
             parksScore = parksIndex * weightsDict['parklands']
-            print('parks: ', parksRatio, parksIndex, weightsDict['parklands'], parksScore)
             
             # Calculate score for hilliness.
             # Similar to parkland, we want a parabolic index in the range 0-1, centred on the preferred hilliness ratio.
@@ -916,23 +869,18 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             else: 
                 hillsIndex = 0
             hillsScore = hillsIndex * weightsDict['hills']
-            print('hills: ', hillsRatio, hillsIndex, thresholdsDict['hills'], hillsScore) 
             
             # Calculate score for start location.
             startLocsScore = startLocsVal * weightsDict['starts']
-            print('startLocs: ', startLocsVal, weightsDict['starts'], startLocsScore)
-            
             
             # Calculate the final score. 
             # Sum the index criteria and multiply by the binary criteria to produce a raw (not standardised) score.
-            rawScore = (recentUseScore + parksScore + hillsScore + startLocsScore) * linearFeatureBinary
-            print('rawScore: ', rawScore)
+            rawScore = (recentUseScore + parksScore + hillsScore + startLocsScore) * linearFeatureScore
             
             # Update the variable tracking the maximum finalScore
             if rawScore > scoreMax: 
                 scoreMax = rawScore
             
-            print('scoreMax: ', scoreMax)
             # Normalise the raw suitability scores using the maximum value.
             if rawScore > 0:
                 finalScore = rawScore / scoreMax
@@ -942,51 +890,52 @@ class OrienteeringVicSuitabilityAnalysis(QgsProcessingAlgorithm):
             
             print(i['Map_Name'], 'FINAL SCORE:', finalScore)
             
+            
             compAreasAllCriteria.startEditing()
             i['CA_SCORE'] = finalScore
             compAreasAllCriteria.updateFeature(i)
             compAreasAllCriteria.commitChanges()
-
-
+        
         # APPLY STYLES TO MAP LAYERS
-        #compAreaMap = QgisInterface.addVectorLayer(compAreasFinal, 'Competition Areas', 'ogr')
-        #startLocationMap = QgisInterface.addVectorLayer(startLocationsFinal, 'Start Locations', 'ogr')
-
+        # Create a pointer to the target field we will use for symbolisation
         tf = 'CA_SCORE'
+        
+        # Create variables to use during the loop
         rangeList = []
         classesList = [-1, 0, 0.25, 0.5, 0.75, 1]
         opacity = 1
 
         # Symbology classes
-        for i,v in enumerate(classesList): #len(classesList): 
+        for i,v in enumerate(classesList): 
             # Avoid running the final loop, as we want to build one fewer class than items in the list. 
             if i == (len(classesList)-1):
                 break 
             
+            # use the loop index to set values for our class range 
             minval = classesList[i]
             maxval = classesList[(i+1)]
+            
+            # create a label for the class 
             classLabel = (str(maxval*100) + '% suitable')
+            
             # Set the color range from pale purple for unsuitable to dark purple for most suitable. 
             # Use maxVal (which has a range of 0-1) to create the steps in the color. 
             color = QtGui.QColor((226-(156*maxval)), (200-(200*maxval)), (250-(110*maxval)))
             
+            # Set the symbolisation with these settings 
             symbol = QgsSymbol.defaultSymbol(compAreasAllCriteria.geometryType())
             symbol.setColor(color)
             symbol.setOpacity(opacity)
-            
             classRange = QgsRendererRange(minval, maxval, symbol, classLabel)
-            print(classRange)
             rangeList.append(classRange)
-
-        print(rangeList)
-
-        # Apply ranges to layer
+        
+        # Apply ranges to layer and set the renderer 
         groupRenderer = QgsGraduatedSymbolRenderer('', rangeList)
-        groupRenderer.classificationMethod(QgsGraduatedSymbolRenderer.EqualInterval)
+        groupRenderer.setClassificationMethod(QgsApplication.classificationMethodRegistry().method("EqualInterval"))
         groupRenderer.setClassAttribute(tf)
-
         compAreasAllCriteria.setRenderer(groupRenderer)
-
-        QgsProject.instance().addMapLayer(compAreasAllCriteria)
-
+        
+        # Add the layer to the view 
+        QgsProject.instance().addMapLayer(compAreasAllCriteria) #Note that I have not succeeded in getting this step to execute in QGIS at present. 
+        
         return {}
